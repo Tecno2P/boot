@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32 Dual Boot Manager — OTA Flash</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="navbar-brand">&#9889; DualBoot</div>
+  <ul class="navbar-links">
+    <li><a href="index.html">Dashboard</a></li>
+    <li><a href="switch.html">Boot Switcher</a></li>
+    <li><a href="flash.html" class="active">OTA Flash</a></li>
+    <li><a href="wifi.html">WiFi Settings</a></li>
+    <li><a href="files.html">File Manager</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+  <div class="page-title">OTA Flash Firmware</div>
+  <div class="page-subtitle">Upload a compiled .bin firmware file to either partition slot</div>
+
+  <!-- Size limit alert -->
+  <div class="alert alert-info mb-3">
+    <strong>Size Limits:</strong>
+    APP0 max = <strong>1,638,400 bytes (1.56 MB)</strong> &nbsp;|&nbsp;
+    APP1 max = <strong>1,048,576 bytes (1.00 MB)</strong>.
+    Files exceeding these limits will be rejected before upload.
+  </div>
+
+  <div class="grid-2">
+
+    <!-- ── APP0 Flash Section ── -->
+    <div class="card" id="sectionApp0">
+      <div class="section-title">
+        <span class="dot"></span>
+        Flash to APP0 Slot
+        <span id="app0CurrentBadge" class="badge badge-empty" style="margin-left:auto;">EMPTY</span>
+      </div>
+
+      <div class="partition-info text-sm mb-2">
+        Offset: <strong class="text-mono">0x10000</strong> &bull;
+        Max size: <strong>1,638,400 bytes</strong> &bull;
+        Subtype: <strong>ota_0</strong>
+      </div>
+
+      <!-- File picker -->
+      <div class="form-group">
+        <label class="form-label">Select Firmware (.bin)</label>
+        <div style="position:relative;display:block;">
+          <label class="file-input-label" id="app0FileLbl">Choose .bin file&hellip;</label>
+          <input type="file" accept=".bin" id="app0FileInput" class="file-input-real"
+                 onchange="onFileSelect('app0')" style="position:relative;width:100%;height:44px;opacity:0;cursor:pointer;margin-top:-44px;">
+        </div>
+        <div class="form-hint mt-1" id="app0FileInfo"></div>
+        <div class="form-error" id="app0FileError"></div>
+      </div>
+
+      <!-- Progress -->
+      <div id="app0Progress" class="hidden">
+        <div class="progress-wrap">
+          <div class="progress-label">
+            <span id="app0ProgressLabel">Uploading&hellip;</span>
+            <span id="app0ProgressPct">0%</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="app0ProgressBar" style="width:0%"></div>
+          </div>
+        </div>
+        <div class="text-sm text-muted text-mono mt-1" id="app0ByteInfo">0 / 0 bytes</div>
+      </div>
+
+      <!-- Result -->
+      <div id="app0Result" class="hidden mt-2"></div>
+
+      <!-- Actions -->
+      <div class="flex gap-2 mt-2">
+        <button class="btn btn-primary" id="btnFlashApp0" onclick="startFlash('app0')" disabled>
+          Flash to APP0
+        </button>
+        <button class="btn btn-secondary hidden" id="btnBootApp0" onclick="bootAfterFlash('app0')">
+          Set Boot + Reboot
+        </button>
+      </div>
+    </div>
+
+    <!-- ── APP1 Flash Section ── -->
+    <div class="card" id="sectionApp1">
+      <div class="section-title">
+        <span class="dot"></span>
+        Flash to APP1 Slot
+        <span id="app1CurrentBadge" class="badge badge-empty" style="margin-left:auto;">EMPTY</span>
+      </div>
+
+      <div class="partition-info text-sm mb-2">
+        Offset: <strong class="text-mono">0x1A0000</strong> &bull;
+        Max size: <strong>1,048,576 bytes</strong> &bull;
+        Subtype: <strong>ota_1</strong>
+      </div>
+
+      <!-- File picker -->
+      <div class="form-group">
+        <label class="form-label">Select Firmware (.bin)</label>
+        <div style="position:relative;display:block;">
+          <label class="file-input-label" id="app1FileLbl">Choose .bin file&hellip;</label>
+          <input type="file" accept=".bin" id="app1FileInput" class="file-input-real"
+                 onchange="onFileSelect('app1')" style="position:relative;width:100%;height:44px;opacity:0;cursor:pointer;margin-top:-44px;">
+        </div>
+        <div class="form-hint mt-1" id="app1FileInfo"></div>
+        <div class="form-error" id="app1FileError"></div>
+      </div>
+
+      <!-- Progress -->
+      <div id="app1Progress" class="hidden">
+        <div class="progress-wrap">
+          <div class="progress-label">
+            <span id="app1ProgressLabel">Uploading&hellip;</span>
+            <span id="app1ProgressPct">0%</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="app1ProgressBar" style="width:0%"></div>
+          </div>
+        </div>
+        <div class="text-sm text-muted text-mono mt-1" id="app1ByteInfo">0 / 0 bytes</div>
+      </div>
+
+      <!-- Result -->
+      <div id="app1Result" class="hidden mt-2"></div>
+
+      <!-- Actions -->
+      <div class="flex gap-2 mt-2">
+        <button class="btn btn-primary" id="btnFlashApp1" onclick="startFlash('app1')" disabled>
+          Flash to APP1
+        </button>
+        <button class="btn btn-secondary hidden" id="btnBootApp1" onclick="bootAfterFlash('app1')">
+          Set Boot + Reboot
+        </button>
+      </div>
+    </div>
+
+  </div><!-- /grid-2 -->
+
+  <!-- Instructions -->
+  <div class="card mt-3">
+    <div class="section-title"><span class="dot"></span> How to Flash Firmware</div>
+    <ol style="padding-left:1.5rem;line-height:2.2;color:var(--text-muted);font-size:0.9rem;">
+      <li>Compile your firmware in Arduino IDE: <strong>Sketch → Export Compiled Binary</strong></li>
+      <li>Find the <code style="font-family:var(--mono);background:var(--surface2);padding:0.1rem 0.35rem;border-radius:3px;">.bin</code> file in your sketch folder</li>
+      <li>Select the target slot (APP0 or APP1) — note the size limit for each</li>
+      <li>Click <strong>Flash</strong> and wait for the upload to complete</li>
+      <li>After success, click <strong>Set Boot + Reboot</strong> to switch to the new firmware</li>
+    </ol>
+  </div>
+
+</div><!-- /container -->
+
+<!-- Reboot countdown overlay -->
+<div class="modal-overlay" id="rebootOverlay">
+  <div class="modal" style="text-align:center;">
+    <div class="modal-title mb-2">Rebooting into New Firmware</div>
+    <div class="countdown" id="rebootCountdown">3</div>
+    <div class="text-muted mt-2">Setting boot partition and restarting&hellip;</div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+const MAX_SIZE = { app0: 1638400, app1: 1048576 };
+const selectedFile = { app0: null, app1: null };
+let statusData = {};
+
+// ── Toast ────────────────────────────────────────────────────
+function showToast(title, msg, type = 'info') {
+  const icons = { success:'✅', error:'❌', info:'ℹ️', warning:'⚠️' };
+  const tc = document.getElementById('toastContainer');
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.innerHTML = `<div class="toast-icon">${icons[type]||'ℹ️'}</div>
+    <div class="toast-body">
+      <div class="toast-title">${title}</div>
+      <div class="toast-msg">${msg}</div>
+    </div>`;
+  tc.appendChild(t);
+  setTimeout(() => { t.classList.add('hide'); setTimeout(() => t.remove(), 300); }, 5000);
+}
+
+function fmtBytes(b) {
+  if (b >= 1048576) return (b/1048576).toFixed(2) + ' MB';
+  if (b >= 1024)    return (b/1024).toFixed(1) + ' KB';
+  return b + ' B';
+}
+
+function badgeClass(state) {
+  const map = {
+    VALID:'badge-valid', INVALID:'badge-invalid', PENDING:'badge-pending',
+    NEW:'badge-new', ABORTED:'badge-invalid', EMPTY:'badge-empty', MISSING:'badge-empty'
+  };
+  return map[state] || 'badge-empty';
+}
+
+// ── Load current partition states ─────────────────────────────
+async function loadStatus() {
+  try {
+    const r = await fetch('/api/status');
+    if (!r.ok) return;
+    statusData = await r.json();
+
+    ['app0','app1'].forEach(slot => {
+      const state = slot === 'app0' ? statusData.app0_state : statusData.app1_state;
+      const badge = document.getElementById(slot + 'CurrentBadge');
+      badge.textContent = state;
+      badge.className   = 'badge ' + badgeClass(state);
+    });
+  } catch(e) {}
+}
+
+// ── File selection ────────────────────────────────────────────
+function onFileSelect(slot) {
+  const input = document.getElementById(slot + 'FileInput');
+  const lbl   = document.getElementById(slot + 'FileLbl');
+  const info  = document.getElementById(slot + 'FileInfo');
+  const err   = document.getElementById(slot + 'FileError');
+  const btn   = document.getElementById('btnFlash' + slot.charAt(0).toUpperCase() + slot.slice(1));
+
+  // Reset result/boot button
+  document.getElementById(slot + 'Result').classList.add('hidden');
+  document.getElementById('btnBoot' + slot.charAt(0).toUpperCase() + slot.slice(1)).classList.add('hidden');
+
+  const file = input.files[0];
+  if (!file) {
+    selectedFile[slot] = null;
+    btn.disabled = true;
+    lbl.textContent = 'Choose .bin file…';
+    info.textContent = '';
+    err.classList.remove('visible');
+    return;
+  }
+
+  selectedFile[slot] = file;
+  lbl.textContent = file.name;
+  err.classList.remove('visible');
+
+  const max = MAX_SIZE[slot];
+  if (file.size > max) {
+    err.textContent = `File too large! ${fmtBytes(file.size)} exceeds max ${fmtBytes(max)} for ${slot.toUpperCase()}.`;
+    err.classList.add('visible');
+    info.textContent = '';
+    btn.disabled = true;
+    selectedFile[slot] = null;
+    return;
+  }
+
+  const pct = ((file.size / max) * 100).toFixed(1);
+  info.textContent = `Size: ${fmtBytes(file.size)} (${pct}% of max ${fmtBytes(max)})`;
+  btn.disabled = false;
+}
+
+// ── Flash via XHR for progress ────────────────────────────────
+function startFlash(slot) {
+  const file = selectedFile[slot];
+  if (!file) return;
+
+  const capSlot = slot.charAt(0).toUpperCase() + slot.slice(1);
+  const btnFlash = document.getElementById('btnFlash' + capSlot);
+  const btnBoot  = document.getElementById('btnBoot'  + capSlot);
+  const progWrap = document.getElementById(slot + 'Progress');
+  const progBar  = document.getElementById(slot + 'ProgressBar');
+  const progPct  = document.getElementById(slot + 'ProgressPct');
+  const progLbl  = document.getElementById(slot + 'ProgressLabel');
+  const byteInfo = document.getElementById(slot + 'ByteInfo');
+  const resultEl = document.getElementById(slot + 'Result');
+
+  // Disable controls
+  btnFlash.disabled = true;
+  document.getElementById(slot + 'FileInput').disabled = true;
+  btnBoot.classList.add('hidden');
+  resultEl.classList.add('hidden');
+
+  // Show progress
+  progWrap.classList.remove('hidden');
+  progBar.style.width = '0%';
+  progPct.textContent = '0%';
+  progLbl.textContent = 'Uploading…';
+  byteInfo.textContent = `0 / ${fmtBytes(file.size)}`;
+
+  const formData = new FormData();
+  formData.append('firmware', file, file.name);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/flash?slot=' + slot, true);
+
+  xhr.upload.onprogress = function(e) {
+    if (e.lengthComputable) {
+      const pct = Math.round((e.loaded / e.total) * 100);
+      progBar.style.width = pct + '%';
+      progPct.textContent = pct + '%';
+      byteInfo.textContent = `${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}`;
+      progLbl.textContent = pct < 100 ? 'Uploading…' : 'Finalizing…';
+    }
+  };
+
+  xhr.onload = function() {
+    document.getElementById(slot + 'FileInput').disabled = false;
+
+    try {
+      const d = JSON.parse(xhr.responseText);
+      if (xhr.status === 200 && d.success) {
+        progBar.style.width = '100%';
+        progPct.textContent = '100%';
+        progLbl.textContent = 'Complete!';
+        byteInfo.textContent = `${fmtBytes(d.bytes)} written to ${d.slot.toUpperCase()}`;
+
+        resultEl.innerHTML = `<div class="alert alert-success">
+          <strong>Flash successful!</strong> ${fmtBytes(d.bytes)} written to ${(d.slot||slot).toUpperCase()}.
+          <br>Click <strong>Set Boot + Reboot</strong> to start using this firmware.
+        </div>`;
+        resultEl.classList.remove('hidden');
+
+        btnBoot.classList.remove('hidden');
+        btnFlash.disabled = false;
+        showToast('Flash Complete', `Firmware flashed to ${slot.toUpperCase()} successfully.`, 'success');
+        loadStatus();
+      } else {
+        throw new Error(d.message || 'Unknown error');
+      }
+    } catch(e) {
+      progBar.classList.add('danger');
+      progLbl.textContent = 'Error!';
+      resultEl.innerHTML = `<div class="alert alert-danger"><strong>Flash failed:</strong> ${e.message}</div>`;
+      resultEl.classList.remove('hidden');
+      btnFlash.disabled = false;
+      showToast('Flash Failed', e.message, 'error');
+    }
+  };
+
+  xhr.onerror = function() {
+    document.getElementById(slot + 'FileInput').disabled = false;
+    progBar.classList.add('danger');
+    progLbl.textContent = 'Connection error!';
+    resultEl.innerHTML = `<div class="alert alert-danger"><strong>Upload failed:</strong> Network error or device disconnected.</div>`;
+    resultEl.classList.remove('hidden');
+    btnFlash.disabled = false;
+    showToast('Upload Error', 'Network error during upload.', 'error');
+  };
+
+  xhr.send(formData);
+}
+
+// ── Boot after flash ─────────────────────────────────────────
+async function bootAfterFlash(slot) {
+  const capSlot = slot.charAt(0).toUpperCase() + slot.slice(1);
+  document.getElementById('btnBoot' + capSlot).disabled = true;
+
+  try {
+    const r = await fetch('/api/switch?target=' + slot);
+    const d = await r.json();
+    if (d.success) {
+      showToast('Switching', 'Setting boot partition and rebooting…', 'success');
+      startRebootCountdown();
+    } else {
+      throw new Error(d.message);
+    }
+  } catch(e) {
+    // Device may have rebooted before response
+    startRebootCountdown();
+  }
+}
+
+function startRebootCountdown() {
+  document.getElementById('rebootOverlay').classList.add('open');
+  let n = 3;
+  const el = document.getElementById('rebootCountdown');
+  el.textContent = n;
+  const iv = setInterval(() => {
+    n--;
+    el.textContent = n <= 0 ? '✓' : n;
+    if (n <= 0) clearInterval(iv);
+  }, 1000);
+  setTimeout(pollReconnect, 5000);
+}
+
+async function pollReconnect() {
+  for (let i = 0; i < 20; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    try {
+      const r = await fetch('/api/status', { signal: AbortSignal.timeout(2000) });
+      if (r.ok) { window.location.href = 'index.html'; return; }
+    } catch(e) {}
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────
+loadStatus();
+</script>
+</body>
+</html>

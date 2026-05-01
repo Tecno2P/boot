@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32 Dual Boot Manager — File Manager</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="navbar-brand">&#9889; DualBoot</div>
+  <ul class="navbar-links">
+    <li><a href="index.html">Dashboard</a></li>
+    <li><a href="switch.html">Boot Switcher</a></li>
+    <li><a href="flash.html">OTA Flash</a></li>
+    <li><a href="wifi.html">WiFi Settings</a></li>
+    <li><a href="files.html" class="active">File Manager</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+  <div class="page-title">SPIFFS File Manager</div>
+  <div class="page-subtitle">Browse, upload, and delete files stored in the SPIFFS filesystem</div>
+
+  <!-- Usage bar -->
+  <div class="card mb-3" id="usageCard">
+    <div class="flex items-center justify-between mb-2">
+      <div class="section-title" style="margin-bottom:0;border-bottom:none;padding-bottom:0;">
+        <span class="dot"></span> SPIFFS Usage
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="loadFiles()">&#8635; Refresh</button>
+    </div>
+    <div class="progress-wrap">
+      <div class="progress-label">
+        <span id="usageLabel">Loading&hellip;</span>
+        <span id="usagePct">—</span>
+      </div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="usageBar" style="width:0%"></div>
+      </div>
+    </div>
+    <div class="text-sm text-muted mt-1" id="usageDetail"></div>
+  </div>
+
+  <!-- Upload section -->
+  <div class="card mb-3">
+    <div class="section-title"><span class="dot"></span> Upload File</div>
+
+    <div class="flex flex-wrap gap-2 items-center">
+      <div style="flex:1;min-width:220px;position:relative;">
+        <label class="file-input-label" id="uploadFileLbl">Choose file to upload&hellip;</label>
+        <input type="file" id="uploadFileInput" class="file-input-real"
+               onchange="onUploadFileSelect()" style="position:relative;width:100%;height:44px;opacity:0;cursor:pointer;margin-top:-44px;">
+      </div>
+      <button class="btn btn-primary" id="btnUpload" onclick="uploadFile()" disabled>
+        Upload
+      </button>
+    </div>
+
+    <div class="form-hint mt-1" id="uploadFileInfo"></div>
+
+    <!-- Upload progress -->
+    <div id="uploadProgress" class="hidden mt-2">
+      <div class="progress-wrap">
+        <div class="progress-label">
+          <span id="uploadProgressLabel">Uploading&hellip;</span>
+          <span id="uploadProgressPct">0%</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" id="uploadProgressBar" style="width:0%"></div>
+        </div>
+      </div>
+    </div>
+    <div id="uploadResult" class="hidden mt-2"></div>
+  </div>
+
+  <!-- File list -->
+  <div class="card">
+    <div class="section-title"><span class="dot"></span> Files</div>
+
+    <!-- Loading -->
+    <div id="filesLoading" class="loading-center" style="padding:2rem;">
+      <div class="spinner"></div>
+      <span>Loading files&hellip;</span>
+    </div>
+
+    <!-- Empty state -->
+    <div id="filesEmpty" class="hidden" style="padding:2rem;text-align:center;color:var(--text-muted);">
+      <div style="font-size:2rem;margin-bottom:0.5rem;">&#128193;</div>
+      <div>No files in SPIFFS filesystem.</div>
+      <div class="text-sm mt-1">Upload files using the form above.</div>
+    </div>
+
+    <!-- Table -->
+    <div class="table-wrap hidden" id="filesTableWrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Filename</th>
+            <th>Size</th>
+            <th style="width:120px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="filesTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<!-- Delete confirmation modal -->
+<div class="modal-overlay" id="deleteModal">
+  <div class="modal">
+    <div class="modal-title">Delete File?</div>
+    <div class="modal-body">
+      Are you sure you want to delete
+      <strong id="deleteFileName" class="text-mono text-bright"></strong>?
+      This action cannot be undone.
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeDeleteModal()">Cancel</button>
+      <button class="btn btn-danger" id="btnConfirmDelete" onclick="confirmDelete()">Delete File</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+let pendingDeleteFile = null;
+
+// ── Toast ────────────────────────────────────────────────────
+function showToast(title, msg, type = 'info') {
+  const icons = { success:'✅', error:'❌', info:'ℹ️', warning:'⚠️' };
+  const tc = document.getElementById('toastContainer');
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.innerHTML = `<div class="toast-icon">${icons[type]||'ℹ️'}</div>
+    <div class="toast-body">
+      <div class="toast-title">${title}</div>
+      <div class="toast-msg">${msg}</div>
+    </div>`;
+  tc.appendChild(t);
+  setTimeout(() => { t.classList.add('hide'); setTimeout(() => t.remove(), 300); }, 5000);
+}
+
+function fmtBytes(b) {
+  if (b >= 1048576) return (b/1048576).toFixed(2) + ' MB';
+  if (b >= 1024)    return (b/1024).toFixed(1) + ' KB';
+  return b + ' B';
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Load file list ────────────────────────────────────────────
+async function loadFiles() {
+  const loading    = document.getElementById('filesLoading');
+  const empty      = document.getElementById('filesEmpty');
+  const tableWrap  = document.getElementById('filesTableWrap');
+  const tbody      = document.getElementById('filesTableBody');
+
+  loading.classList.remove('hidden');
+  empty.classList.add('hidden');
+  tableWrap.classList.add('hidden');
+
+  try {
+    const r = await fetch('/api/files');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+
+    // Update usage bar
+    const used  = d.used  || 0;
+    const total = d.total || 1;
+    const pct   = Math.round((used / total) * 100);
+
+    document.getElementById('usageLabel').textContent = `${fmtBytes(used)} used of ${fmtBytes(total)}`;
+    document.getElementById('usagePct').textContent   = pct + '%';
+    document.getElementById('usageDetail').textContent = `${fmtBytes(total - used)} free`;
+
+    const bar = document.getElementById('usageBar');
+    bar.style.width = pct + '%';
+    bar.className   = 'progress-bar-fill' + (pct > 85 ? ' danger' : '');
+
+    loading.classList.add('hidden');
+
+    if (!d.files || d.files.length === 0) {
+      empty.classList.remove('hidden');
+      return;
+    }
+
+    // Sort files by name
+    d.files.sort((a,b) => a.name.localeCompare(b.name));
+
+    tbody.innerHTML = d.files.map(f => `
+      <tr>
+        <td class="td-label text-mono">${escHtml(f.name)}</td>
+        <td>${fmtBytes(f.size)}</td>
+        <td>
+          <button class="btn btn-danger btn-sm" onclick="deleteFile('${escHtml(f.name)}')">
+            &#128465; Delete
+          </button>
+        </td>
+      </tr>
+    `).join('');
+
+    tableWrap.classList.remove('hidden');
+
+  } catch(e) {
+    loading.classList.add('hidden');
+    showToast('Error', 'Failed to load files: ' + e.message, 'error');
+  }
+}
+
+// ── File select for upload ────────────────────────────────────
+function onUploadFileSelect() {
+  const input   = document.getElementById('uploadFileInput');
+  const lbl     = document.getElementById('uploadFileLbl');
+  const info    = document.getElementById('uploadFileInfo');
+  const btn     = document.getElementById('btnUpload');
+  const result  = document.getElementById('uploadResult');
+  const progress = document.getElementById('uploadProgress');
+
+  result.classList.add('hidden');
+  progress.classList.add('hidden');
+
+  const file = input.files[0];
+  if (!file) {
+    lbl.textContent = 'Choose file to upload…';
+    info.textContent = '';
+    btn.disabled = true;
+    return;
+  }
+
+  lbl.textContent  = file.name;
+  info.textContent = `Size: ${fmtBytes(file.size)}`;
+  btn.disabled = false;
+}
+
+// ── Upload file ───────────────────────────────────────────────
+function uploadFile() {
+  const input    = document.getElementById('uploadFileInput');
+  const btn      = document.getElementById('btnUpload');
+  const progWrap = document.getElementById('uploadProgress');
+  const progBar  = document.getElementById('uploadProgressBar');
+  const progPct  = document.getElementById('uploadProgressPct');
+  const progLbl  = document.getElementById('uploadProgressLabel');
+  const resultEl = document.getElementById('uploadResult');
+
+  const file = input.files[0];
+  if (!file) return;
+
+  btn.disabled = true;
+  resultEl.classList.add('hidden');
+  progWrap.classList.remove('hidden');
+  progBar.style.width = '0%';
+  progPct.textContent = '0%';
+  progLbl.textContent = 'Uploading…';
+
+  const formData = new FormData();
+  formData.append('file', file, file.name);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/upload', true);
+
+  xhr.upload.onprogress = function(e) {
+    if (e.lengthComputable) {
+      const pct = Math.round((e.loaded / e.total) * 100);
+      progBar.style.width = pct + '%';
+      progPct.textContent = pct + '%';
+      progLbl.textContent = pct < 100 ? 'Uploading…' : 'Saving to SPIFFS…';
+    }
+  };
+
+  xhr.onload = function() {
+    btn.disabled = false;
+    try {
+      const d = JSON.parse(xhr.responseText);
+      if (xhr.status === 200 && d.success) {
+        progBar.style.width = '100%';
+        progPct.textContent = '100%';
+        progLbl.textContent = 'Complete!';
+        resultEl.innerHTML = `<div class="alert alert-success"><strong>Uploaded!</strong> ${escHtml(file.name)} saved to SPIFFS.</div>`;
+        resultEl.classList.remove('hidden');
+        showToast('Upload Complete', file.name + ' uploaded successfully.', 'success');
+
+        // Reset input
+        input.value = '';
+        document.getElementById('uploadFileLbl').textContent = 'Choose file to upload…';
+        document.getElementById('uploadFileInfo').textContent = '';
+
+        // Reload file list
+        loadFiles();
+      } else {
+        throw new Error(d.message || 'Upload failed');
+      }
+    } catch(e2) {
+      progBar.classList.add('danger');
+      progLbl.textContent = 'Error!';
+      resultEl.innerHTML = `<div class="alert alert-danger"><strong>Upload failed:</strong> ${e2.message}</div>`;
+      resultEl.classList.remove('hidden');
+      showToast('Upload Failed', e2.message, 'error');
+    }
+  };
+
+  xhr.onerror = function() {
+    btn.disabled = false;
+    progBar.classList.add('danger');
+    progLbl.textContent = 'Network error!';
+    resultEl.innerHTML = `<div class="alert alert-danger"><strong>Upload failed:</strong> Network error.</div>`;
+    resultEl.classList.remove('hidden');
+    showToast('Upload Error', 'Network error during upload.', 'error');
+  };
+
+  xhr.send(formData);
+}
+
+// ── Delete file ───────────────────────────────────────────────
+function deleteFile(name) {
+  pendingDeleteFile = name;
+  document.getElementById('deleteFileName').textContent = name;
+  document.getElementById('deleteModal').classList.add('open');
+}
+
+function closeDeleteModal() {
+  document.getElementById('deleteModal').classList.remove('open');
+  pendingDeleteFile = null;
+}
+
+async function confirmDelete() {
+  if (!pendingDeleteFile) return;
+  const name = pendingDeleteFile;
+  closeDeleteModal();
+
+  const btn = document.getElementById('btnConfirmDelete');
+  btn.disabled = true;
+
+  try {
+    const r = await fetch('/api/file?name=' + encodeURIComponent(name), { method: 'DELETE' });
+    const d = await r.json();
+    if (d.success) {
+      showToast('Deleted', name + ' has been deleted.', 'success');
+      loadFiles();
+    } else {
+      throw new Error(d.message || 'Delete failed');
+    }
+  } catch(e) {
+    showToast('Delete Failed', e.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────
+loadFiles();
+</script>
+</body>
+</html>

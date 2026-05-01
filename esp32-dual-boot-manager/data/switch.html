@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32 Dual Boot Manager — Boot Switcher</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="navbar-brand">&#9889; DualBoot</div>
+  <ul class="navbar-links">
+    <li><a href="index.html">Dashboard</a></li>
+    <li><a href="switch.html" class="active">Boot Switcher</a></li>
+    <li><a href="flash.html">OTA Flash</a></li>
+    <li><a href="wifi.html">WiFi Settings</a></li>
+    <li><a href="files.html">File Manager</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+  <div class="page-title">Boot Partition Switcher</div>
+  <div class="page-subtitle">Select which firmware partition to boot from on the next restart</div>
+
+  <!-- Loading -->
+  <div id="loadingState" class="loading-center">
+    <div class="spinner spinner-lg"></div>
+    <span>Loading partition info&hellip;</span>
+  </div>
+
+  <!-- Content -->
+  <div id="mainContent" class="hidden">
+
+    <!-- Status summary -->
+    <div class="card mb-3" id="statusSummary">
+      <div class="flex flex-wrap gap-2 items-center justify-between">
+        <div>
+          <div class="card-title">Current Status</div>
+          <div class="flex flex-wrap gap-2 mt-1">
+            <span>Running: <strong id="runningInfo" class="text-accent text-mono">—</strong></span>
+            <span class="text-muted">&bull;</span>
+            <span>Boot target: <strong id="bootInfo" class="text-mono">—</strong></span>
+          </div>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="loadStatus()">&#8635; Refresh</button>
+      </div>
+    </div>
+
+    <!-- Partition selector cards -->
+    <div class="grid-2 mb-3">
+      <!-- APP0 -->
+      <div class="partition-card" id="cardApp0" onclick="initiateSwitch('app0')">
+        <div class="partition-label">APP0</div>
+        <div class="flex items-center justify-between mb-2" style="justify-content:center;gap:0.5rem;">
+          <span id="app0StateBadge" class="badge badge-empty">EMPTY</span>
+          <span id="app0FlagBadges"></span>
+        </div>
+        <div class="partition-info" id="app0Info">
+          Offset: <strong>0x10000</strong><br>
+          Max size: <strong>1,638,400 bytes (1.56 MB)</strong><br>
+          State: <strong id="app0StateText">—</strong>
+        </div>
+        <button class="btn btn-primary btn-lg btn-block" id="btnApp0" style="margin-top:0.5rem;">
+          Boot from APP0
+        </button>
+      </div>
+
+      <!-- APP1 -->
+      <div class="partition-card" id="cardApp1" onclick="initiateSwitch('app1')">
+        <div class="partition-label">APP1</div>
+        <div class="flex items-center justify-between mb-2" style="justify-content:center;gap:0.5rem;">
+          <span id="app1StateBadge" class="badge badge-empty">EMPTY</span>
+          <span id="app1FlagBadges"></span>
+        </div>
+        <div class="partition-info" id="app1Info">
+          Offset: <strong>0x1A0000</strong><br>
+          Max size: <strong>1,048,576 bytes (1.00 MB)</strong><br>
+          State: <strong id="app1StateText">—</strong>
+        </div>
+        <button class="btn btn-primary btn-lg btn-block" id="btnApp1" style="margin-top:0.5rem;">
+          Boot from APP1
+        </button>
+      </div>
+    </div>
+
+    <!-- Warning notes -->
+    <div class="alert alert-warning mb-2">
+      <strong>Warning:</strong> Switching boot partition will immediately reboot the device.
+      Make sure the target partition contains valid firmware before switching.
+    </div>
+    <div class="alert alert-info">
+      <strong>Note:</strong> EMPTY or INVALID partitions cannot be selected as boot targets.
+      Flash firmware to a slot first via the <a href="flash.html">OTA Flash</a> page.
+    </div>
+
+  </div><!-- /mainContent -->
+
+  <!-- Rebooting countdown -->
+  <div id="rebootingState" class="hidden">
+    <div class="card" style="text-align:center;padding:3rem;">
+      <div class="page-title mb-2">Switching Boot Partition&hellip;</div>
+      <div class="countdown" id="countdownNum">3</div>
+      <div class="text-muted mt-2">Device is rebooting. Reconnect in a moment.</div>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<!-- Confirmation modal -->
+<div class="modal-overlay" id="confirmModal">
+  <div class="modal">
+    <div class="modal-title" id="modalTitle">Switch Boot Partition?</div>
+    <div class="modal-body" id="modalBody">
+      Are you sure you want to set <strong id="modalTarget">APP0</strong> as the next boot partition?
+      The device will reboot immediately.
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="modalConfirmBtn" onclick="confirmSwitch()">Switch &amp; Reboot</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+let pendingSlot = null;
+let statusData  = {};
+
+// ── Toast ────────────────────────────────────────────────────
+function showToast(title, msg, type = 'info') {
+  const icons = { success:'✅', error:'❌', info:'ℹ️', warning:'⚠️' };
+  const tc = document.getElementById('toastContainer');
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.innerHTML = `<div class="toast-icon">${icons[type]||'ℹ️'}</div>
+    <div class="toast-body">
+      <div class="toast-title">${title}</div>
+      <div class="toast-msg">${msg}</div>
+    </div>`;
+  tc.appendChild(t);
+  setTimeout(() => { t.classList.add('hide'); setTimeout(() => t.remove(), 300); }, 4500);
+}
+
+// ── Badge class ───────────────────────────────────────────────
+function badgeClass(state) {
+  const map = {
+    VALID:'badge-valid', INVALID:'badge-invalid', PENDING:'badge-pending',
+    NEW:'badge-new', ABORTED:'badge-invalid', EMPTY:'badge-empty', MISSING:'badge-empty'
+  };
+  return map[state] || 'badge-empty';
+}
+
+// ── Determine if slot is bootable ─────────────────────────────
+function isBootable(state) {
+  return state === 'VALID' || state === 'NEW' || state === 'PENDING';
+}
+
+// ── Load status ───────────────────────────────────────────────
+async function loadStatus() {
+  try {
+    const r = await fetch('/api/status');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    statusData = await r.json();
+    renderStatus();
+    document.getElementById('loadingState').classList.add('hidden');
+    document.getElementById('mainContent').classList.remove('hidden');
+  } catch(e) {
+    showToast('Error', 'Failed to load status: ' + e.message, 'error');
+  }
+}
+
+function renderStatus() {
+  document.getElementById('runningInfo').textContent = statusData.running ? statusData.running.toUpperCase() : '—';
+  document.getElementById('bootInfo').textContent    = statusData.boot    ? statusData.boot.toUpperCase()    : '—';
+
+  ['app0','app1'].forEach(slot => {
+    const state = slot === 'app0' ? statusData.app0_state : statusData.app1_state;
+    const badge = document.getElementById(slot + 'StateBadge');
+    badge.textContent = state;
+    badge.className   = 'badge ' + badgeClass(state);
+
+    document.getElementById(slot + 'StateText').textContent = state;
+
+    // Flag badges
+    const flags = [];
+    if (statusData.running === slot) flags.push('<span class="badge badge-running">RUNNING</span>');
+    if (statusData.boot    === slot) flags.push('<span class="badge badge-new">BOOT</span>');
+    document.getElementById(slot + 'FlagBadges').innerHTML = flags.join(' ');
+
+    const card = document.getElementById('card' + (slot === 'app0' ? 'App0' : 'App1'));
+    const btn  = document.getElementById('btn'  + (slot === 'app0' ? 'App0' : 'App1'));
+
+    // Style card based on state
+    card.className = 'partition-card';
+    if (statusData.running === slot) card.classList.add('running');
+    else if (statusData.boot === slot) card.classList.add('boot-target');
+
+    // Enable/disable based on bootability
+    const bootable = isBootable(state);
+    btn.disabled = !bootable;
+    if (!bootable) {
+      card.classList.add('disabled-card');
+      btn.title = 'Cannot boot: partition is ' + state;
+    } else {
+      card.classList.remove('disabled-card');
+      btn.title = '';
+    }
+
+    // Highlight current boot target
+    if (statusData.boot === slot) {
+      btn.textContent = '✓ Current Boot Target';
+      btn.className   = 'btn btn-outline btn-lg btn-block';
+    } else {
+      btn.textContent = 'Boot from ' + slot.toUpperCase();
+      btn.className   = 'btn btn-primary btn-lg btn-block';
+    }
+  });
+}
+
+// ── Switch flow ───────────────────────────────────────────────
+function initiateSwitch(slot) {
+  const state = slot === 'app0' ? statusData.app0_state : statusData.app1_state;
+  if (!isBootable(state)) {
+    showToast('Cannot Switch', 'Partition ' + slot.toUpperCase() + ' is ' + state + ' and cannot be booted.', 'error');
+    return;
+  }
+  pendingSlot = slot;
+  document.getElementById('modalTarget').textContent = slot.toUpperCase();
+  document.getElementById('modalBody').innerHTML =
+    `Are you sure you want to set <strong>${slot.toUpperCase()}</strong> (state: <strong>${state}</strong>) as the next boot partition?
+    <br><br>The device will <strong>reboot immediately</strong> after confirmation.`;
+  document.getElementById('confirmModal').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('confirmModal').classList.remove('open');
+  pendingSlot = null;
+}
+
+async function confirmSwitch() {
+  if (!pendingSlot) return;
+  const slot = pendingSlot;
+  closeModal();
+
+  const btn = document.getElementById('modalConfirmBtn');
+  btn.disabled = true;
+
+  try {
+    const r = await fetch('/api/switch?target=' + slot);
+    const d = await r.json();
+
+    if (d.success) {
+      showToast('Success', d.message, 'success');
+      startCountdown();
+    } else {
+      showToast('Switch Failed', d.message, 'error');
+    }
+  } catch(e) {
+    // Device likely rebooting
+    startCountdown();
+  }
+}
+
+function startCountdown() {
+  document.getElementById('mainContent').classList.add('hidden');
+  document.getElementById('rebootingState').classList.remove('hidden');
+
+  let n = 3;
+  const el = document.getElementById('countdownNum');
+  el.textContent = n;
+
+  const iv = setInterval(() => {
+    n--;
+    el.textContent = n;
+    if (n <= 0) {
+      clearInterval(iv);
+      el.textContent = '✓';
+    }
+  }, 1000);
+
+  // Try to reconnect after 6 seconds
+  setTimeout(() => {
+    pollReconnect();
+  }, 5000);
+}
+
+async function pollReconnect() {
+  for (let i = 0; i < 20; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    try {
+      const r = await fetch('/api/status', { signal: AbortSignal.timeout(2000) });
+      if (r.ok) {
+        window.location.reload();
+        return;
+      }
+    } catch(e) {}
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────
+loadStatus();
+</script>
+</body>
+</html>

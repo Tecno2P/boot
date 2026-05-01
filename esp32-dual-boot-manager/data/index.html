@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32 Dual Boot Manager — Dashboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<nav class="navbar">
+  <div class="navbar-brand">&#9889; DualBoot</div>
+  <ul class="navbar-links">
+    <li><a href="index.html" class="active">Dashboard</a></li>
+    <li><a href="switch.html">Boot Switcher</a></li>
+    <li><a href="flash.html">OTA Flash</a></li>
+    <li><a href="wifi.html">WiFi Settings</a></li>
+    <li><a href="files.html">File Manager</a></li>
+  </ul>
+</nav>
+
+<div class="container">
+  <div class="page-title">System Dashboard</div>
+  <div class="page-subtitle">Live status updates every 3 seconds</div>
+
+  <!-- Loading state -->
+  <div id="loadingState" class="loading-center">
+    <div class="spinner spinner-lg"></div>
+    <span>Loading system status&hellip;</span>
+  </div>
+
+  <!-- Main content (hidden until loaded) -->
+  <div id="mainContent" class="hidden">
+
+    <!-- Running / Boot partition highlight row -->
+    <div class="grid-2 mb-3">
+      <div class="card accent" id="cardRunning">
+        <div class="card-title">&#9654; Currently Running</div>
+        <div class="card-value accent" id="runningLabel">—</div>
+        <div class="card-sub">Active firmware partition</div>
+      </div>
+      <div class="card" id="cardBoot">
+        <div class="card-title">&#128196; Next Boot Target</div>
+        <div class="card-value" id="bootLabel">—</div>
+        <div class="card-sub">Will boot from this partition on restart</div>
+      </div>
+    </div>
+
+    <!-- Partition states -->
+    <div class="section-title"><span class="dot"></span> Partition States</div>
+    <div class="grid-2 mb-3">
+      <div class="card">
+        <div class="card-title">APP0 Partition</div>
+        <div class="flex items-center gap-2 mt-1">
+          <span id="app0Badge" class="badge badge-empty">EMPTY</span>
+          <span id="app0Extra" class="text-sm text-muted"></span>
+        </div>
+        <div class="card-sub mt-1">Max: 1,638,400 bytes (1.56 MB) &bull; Offset: 0x10000</div>
+      </div>
+      <div class="card">
+        <div class="card-title">APP1 Partition</div>
+        <div class="flex items-center gap-2 mt-1">
+          <span id="app1Badge" class="badge badge-empty">EMPTY</span>
+          <span id="app1Extra" class="text-sm text-muted"></span>
+        </div>
+        <div class="card-sub mt-1">Max: 1,048,576 bytes (1.00 MB) &bull; Offset: 0x1A0000</div>
+      </div>
+    </div>
+
+    <!-- System metrics -->
+    <div class="section-title"><span class="dot"></span> System Metrics</div>
+    <div class="grid-4 mb-3">
+      <div class="card">
+        <div class="card-title">Free Heap</div>
+        <div class="card-value" id="heapValue">—</div>
+        <div class="card-sub">Available RAM</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Uptime</div>
+        <div class="card-value muted" id="uptimeValue">—</div>
+        <div class="card-sub">Since last boot</div>
+      </div>
+      <div class="card">
+        <div class="card-title">WiFi Mode</div>
+        <div class="flex items-center gap-1 mt-1">
+          <span id="wifiModeBadge" class="badge badge-ap">AP</span>
+        </div>
+        <div class="card-sub mt-1" id="wifiIP">—</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Flash Size</div>
+        <div class="card-value muted" id="flashValue">—</div>
+        <div class="card-sub">Total flash chip</div>
+      </div>
+    </div>
+
+    <!-- Full partition table -->
+    <div class="section-title"><span class="dot"></span> All Partitions</div>
+    <div class="table-wrap mb-3">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Offset</th>
+            <th>Size</th>
+            <th>State</th>
+            <th>Flags</th>
+          </tr>
+        </thead>
+        <tbody id="partitionTableBody">
+          <tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:1.5rem;">Loading&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Quick actions -->
+    <div class="section-title"><span class="dot"></span> Quick Actions</div>
+    <div class="flex flex-wrap gap-2">
+      <a href="switch.html" class="btn btn-primary">Switch Boot Partition</a>
+      <a href="flash.html"  class="btn btn-secondary">Flash New Firmware</a>
+      <button onclick="reboot()" class="btn btn-danger">Reboot Device</button>
+    </div>
+
+  </div><!-- /mainContent -->
+</div><!-- /container -->
+
+<!-- Reboot modal -->
+<div class="modal-overlay" id="rebootModal">
+  <div class="modal">
+    <div class="modal-title">Reboot Device?</div>
+    <div class="modal-body">The ESP32 will restart immediately. The web interface will be unavailable for ~5 seconds.</div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeRebootModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="confirmReboot()">Reboot Now</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+// ── Toast ────────────────────────────────────────────────────
+function showToast(title, msg, type = 'info') {
+  const icons = { success:'✅', error:'❌', info:'ℹ️', warning:'⚠️' };
+  const tc = document.getElementById('toastContainer');
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.innerHTML = `<div class="toast-icon">${icons[type]||'ℹ️'}</div>
+    <div class="toast-body">
+      <div class="toast-title">${title}</div>
+      <div class="toast-msg">${msg}</div>
+    </div>`;
+  tc.appendChild(t);
+  setTimeout(() => { t.classList.add('hide'); setTimeout(() => t.remove(), 300); }, 4500);
+}
+
+// ── Badge helper ─────────────────────────────────────────────
+function stateBadge(state) {
+  const map = {
+    'VALID':   'badge-valid',
+    'INVALID': 'badge-invalid',
+    'PENDING': 'badge-pending',
+    'NEW':     'badge-new',
+    'ABORTED': 'badge-invalid',
+    'EMPTY':   'badge-empty',
+    'MISSING': 'badge-empty'
+  };
+  const cls = map[state] || 'badge-empty';
+  return `<span class="badge ${cls}">${state}</span>`;
+}
+
+// ── Format helpers ───────────────────────────────────────────
+function fmtBytes(b) {
+  if (b >= 1048576) return (b/1048576).toFixed(2) + ' MB';
+  if (b >= 1024)    return (b/1024).toFixed(1) + ' KB';
+  return b + ' B';
+}
+
+function fmtHex(n) { return '0x' + n.toString(16).toUpperCase().padStart(6,'0'); }
+
+// ── Status fetch ─────────────────────────────────────────────
+let firstLoad = true;
+
+async function fetchStatus() {
+  try {
+    const r = await fetch('/api/status');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+
+    document.getElementById('runningLabel').textContent = d.running.toUpperCase();
+    document.getElementById('bootLabel').textContent    = d.boot.toUpperCase();
+
+    // Highlight boot card if different from running
+    const bootCard = document.getElementById('cardBoot');
+    bootCard.className = d.boot !== d.running ? 'card accent' : 'card';
+
+    // APP0/APP1 badges
+    ['app0','app1'].forEach(slot => {
+      const state = slot === 'app0' ? d.app0_state : d.app1_state;
+      document.getElementById(slot+'Badge').outerHTML =
+        `<span id="${slot}Badge" class="badge ${badgeClass(state)}">${state}</span>`;
+      const extra = [];
+      if (d.running === slot) extra.push('<span class="badge badge-running">RUNNING</span>');
+      if (d.boot    === slot) extra.push('<span class="badge badge-new">BOOT</span>');
+      document.getElementById(slot+'Extra').innerHTML = extra.join(' ');
+    });
+
+    // Metrics
+    document.getElementById('heapValue').textContent  = fmtBytes(d.heap);
+    document.getElementById('uptimeValue').textContent = d.uptime;
+    document.getElementById('wifiIP').textContent      = d.ip;
+
+    const wifiB = document.getElementById('wifiModeBadge');
+    wifiB.textContent = d.wifi_mode;
+    wifiB.className   = 'badge ' + (d.wifi_mode === 'AP' ? 'badge-ap' : 'badge-sta');
+
+    document.getElementById('flashValue').textContent = fmtBytes(d.flash_size);
+
+    if (firstLoad) {
+      firstLoad = false;
+      document.getElementById('loadingState').classList.add('hidden');
+      document.getElementById('mainContent').classList.remove('hidden');
+      fetchPartitions();
+    }
+  } catch(e) {
+    if (firstLoad) {
+      showToast('Connection Error', e.message, 'error');
+    }
+  }
+}
+
+function badgeClass(state) {
+  const map = {
+    VALID:'badge-valid', INVALID:'badge-invalid', PENDING:'badge-pending',
+    NEW:'badge-new', ABORTED:'badge-invalid', EMPTY:'badge-empty', MISSING:'badge-empty'
+  };
+  return map[state] || 'badge-empty';
+}
+
+// ── Partitions table ─────────────────────────────────────────
+async function fetchPartitions() {
+  try {
+    const r = await fetch('/api/partitions');
+    if (!r.ok) return;
+    const parts = await r.json();
+    const tbody = document.getElementById('partitionTableBody');
+    tbody.innerHTML = parts.map(p => {
+      const flags = [];
+      if (p.running) flags.push('<span class="badge badge-running">RUNNING</span>');
+      if (p.boot)    flags.push('<span class="badge badge-new">BOOT</span>');
+      return `<tr>
+        <td class="td-label text-mono">${p.name}</td>
+        <td>${fmtHex(p.offset)}</td>
+        <td>${fmtBytes(p.size)}</td>
+        <td>${p.state ? stateBadge(p.state) : '<span class="text-muted">—</span>'}</td>
+        <td>${flags.join(' ') || '<span class="text-muted">—</span>'}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) {}
+}
+
+// ── Reboot ───────────────────────────────────────────────────
+function reboot() {
+  document.getElementById('rebootModal').classList.add('open');
+}
+function closeRebootModal() {
+  document.getElementById('rebootModal').classList.remove('open');
+}
+async function confirmReboot() {
+  closeRebootModal();
+  await fetch('/api/reboot').catch(()=>{});
+  showToast('Rebooting', 'Device is restarting…', 'warning');
+}
+
+// ── Kick off ─────────────────────────────────────────────────
+fetchStatus();
+setInterval(fetchStatus, 3000);
+setInterval(fetchPartitions, 10000);
+</script>
+</body>
+</html>
